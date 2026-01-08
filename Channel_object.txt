@@ -1,0 +1,51 @@
+| Поле                         | Тип               | Описание                                  | Используется в MVP |
+| ---------------------------- | ----------------- | ----------------------------------------- | ------------------ |
+| `id`                         | long              | Уникальный идентификатор чата / канала    | Да                 |
+| `title`                      | string            | Название чата / канала                    | Да                 |
+| `photo`                      | ChatPhoto         | Фото чата / канала                        | Нет                |
+| `date`                       | date              | Дата создания                             | Нет                |
+| `creator`                    | flag              | Является создателем                       | Нет                |
+| `left`                       | flag              | Пользователь покинул чат                  | Нет                |
+| `broadcast`                  | flag              | Канал / рассылка                          | Нет                |
+| `verified`                   | flag              | Верифицированный канал                    | Нет                |
+| `megagroup`                  | flag              | Супергруппа                               | Нет                |
+| `restricted`                 | flag              | Ограниченный доступ                       | Нет                |
+| `signatures`                 | flag              | Подписи сообщений обязательны             | Нет                |
+| `min`                        | flag              | Мини-чат / ограниченный формат            | Нет                |
+| `scam`                       | flag              | Мошеннический канал                       | Нет                |
+| `has_link`                   | flag              | Есть ссылка                               | Нет                |
+| `has_geo`                    | flag              | Геометка доступна                         | Нет                |
+| `slowmode_enabled`           | flag              | Включён slowmode                          | Нет                |
+| `call_active`                | flag              | Активен голосовой звонок                  | Нет                |
+| `call_not_empty`             | flag              | Вызов не пустой                           | Нет                |
+| `fake`                       | flag              | Фейковый чат                              | Нет                |
+| `gigagroup`                  | flag              | Гига-группа                               | Нет                |
+| `noforwards`                 | flag              | Пересылки запрещены                       | Нет                |
+| `join_to_send`               | flag              | Нужно вступление для отправки сообщений   | Нет                |
+| `join_request`               | flag              | Нужно подтверждение запроса на вступление | Нет                |
+| `forum`                      | flag              | Форумный режим                            | Нет                |
+| `stories_hidden`             | flag              | Скрыты истории                            | Нет                |
+| `stories_hidden_min`         | flag              | Мини-скрытые истории                      | Нет                |
+| `stories_unavailable`        | flag              | Истории недоступны                        | Нет                |
+| `signature_profiles`         | flag              | Подписи профилей                          | Нет                |
+| `autotranslation`            | flag              | Автоперевод включён                       | Нет                |
+| `broadcast_messages_allowed` | flag              | Разрешены сообщения для рассылки          | Нет                |
+| `monoforum`                  | flag              | Монофорум                                 | Нет                |
+| `forum_tabs`                 | flag              | Вкладки форума                            | Нет                |
+| `access_hash`                | long              | Хэш для доступа                           | Нет                |
+| `username`                   | string            | Юзернейм канала / чата                    | Да                 |
+| `restriction_reason`         | RestrictionReason | Причины ограничений                       | Нет                |
+| `admin_rights`               | ChatAdminRights   | Права админа                              | Нет                |
+| `banned_rights`              | ChatBannedRights  | Заблокированные права                     | Нет                |
+| `default_banned_rights`      | ChatBannedRights  | Стандартные заблокированные права         | Нет                |
+| `participants_count`         | int               | Количество участников                     | Да                 |
+| `usernames`                  | Username / Vector | Список юзернеймов                         | Нет                |
+| `stories_max_id`             | int               | Максимальный ID историй                   | Нет                |
+| `color`                      | PeerColor         | Цвет чата                                 | Нет                |
+| `profile_color`              | PeerColor         | Цвет профиля                              | Нет                |
+| `emoji_status`               | EmojiStatus       | Эмодзи-статус                             | Нет                |
+| `level`                      | int               | Уровень                                   | Нет                |
+| `subscription_until_date`    | date              | Дата подписки                             | Нет                |
+| `bot_verification_icon`      | long              | Иконка верификации бота                   | Нет                |
+| `send_paid_messages_stars`   | long              | Кол-во платных сообщений                  | Нет                |
+| `linked_monoforum_id`        | long              | Связанный монофорум                       | Нет                |

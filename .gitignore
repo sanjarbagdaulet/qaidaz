@@ -9,6 +9,9 @@
 !get_messages.py
 !sleep_policy.py
 
+!Message_object.txt
+!Channel_object.txt
+
 # --------------------------
 # Исключаем все скрытые файлы кроме .gitignore
 # --------------------------

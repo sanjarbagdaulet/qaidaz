@@ -1,0 +1,46 @@
+| Поле                         | Тип                        | Описание                                 | Используется в MVP                        |
+| ---------------------------- | -------------------------- | ---------------------------------------- | ----------------------------------------- |
+| `id`                         | int                        | Уникальный идентификатор сообщения       | Да                                        |
+| `peer_id`                    | Peer                       | Канал/чат, где опубликовано сообщение    | Да (`channel_id`)                         |
+| `date`                       | date                       | Дата публикации                          | Да (`timestamp`)                          |
+| `message`                    | string                     | Текст сообщения                          | Да (`text`)                               |
+| `from_id`                    | Peer                       | Автор сообщения                          | Нет                                       |
+| `from_boosts_applied`        | int                        | Кол-во бустов автора                     | Нет                                       |
+| `saved_peer_id`              | Peer                       | Канал/чат, откуда переслано сообщение    | Нет                                       |
+| `fwd_from`                   | MessageFwdHeader           | Информация о пересылке                   | Нет (только фильтр `should_skip_message`) |
+| `via_bot_id`                 | long                       | ID бота, через которого прошло сообщение | Нет                                       |
+| `via_business_bot_id`        | long                       | ID бизнес-бота                           | Нет                                       |
+| `reply_to`                   | MessageReplyHeader         | Ответ на другое сообщение                | Нет                                       |
+| `media`                      | MessageMedia               | Медиа-контент                            | Да (`media_type`)                         |
+| `reply_markup`               | ReplyMarkup                | Кнопки / интерактивные элементы          | Нет                                       |
+| `entities`                   | MessageEntity / Vector     | Разметка текста (ссылки, жирное и т.д.)  | Нет                                       |
+| `views`                      | int                        | Кол-во просмотров                        | Нет                                       |
+| `forwards`                   | int                        | Кол-во пересылок                         | Нет                                       |
+| `replies`                    | MessageReplies             | Ответы / комментарии                     | Нет                                       |
+| `edit_date`                  | date                       | Дата редактирования                      | Нет                                       |
+| `post_author`                | string                     | Автор публикации (для каналов)           | Нет                                       |
+| `grouped_id`                 | long                       | ID группы сообщений                      | Нет                                       |
+| `reactions`                  | MessageReactions           | Реакции пользователей                    | Нет                                       |
+| `restriction_reason`         | RestrictionReason / Vector | Причины ограничений                      | Нет                                       |
+| `ttl_period`                 | int                        | Время жизни сообщения                    | Нет                                       |
+| `quick_reply_shortcut_id`    | int                        | Быстрый ответ                            | Нет                                       |
+| `effect`                     | long                       | Визуальные эффекты                       | Нет                                       |
+| `factcheck`                  | FactCheck                  | Проверка фактов                          | Нет                                       |
+| `report_delivery_until_date` | date                       | Дата доставки отчёта                     | Нет                                       |
+| `paid_message_stars`         | long                       | Рейтинг платного сообщения               | Нет                                       |
+| `suggested_post`             | SuggestedPost              | Рекомендованное сообщение                | Нет                                       |
+| `out`                        | flag                       | Сообщение отправлено мной                | Нет                                       |
+| `mentioned`                  | flag                       | Пользователь упомянут                    | Нет                                       |
+| `media_unread`               | flag                       | Медиа непрочитанное                      | Нет                                       |
+| `silent`                     | flag                       | Сообщение без уведомлений                | Нет                                       |
+| `post`                       | flag                       | Публикация в канале                      | Нет                                       |
+| `from_scheduled`             | flag                       | Сообщение запланировано                  | Нет                                       |
+| `legacy`                     | flag                       | Старый формат                            | Нет                                       |
+| `edit_hide`                  | flag                       | Скрытое редактирование                   | Нет                                       |
+| `pinned`                     | flag                       | Сообщение закреплено                     | Нет                                       |
+| `noforwards`                 | flag                       | Запрет пересылки                         | Нет                                       |
+| `invert_media`               | flag                       | Инверсия медиа                           | Нет                                       |
+| `offline`                    | flag                       | Сообщение оффлайн                        | Нет                                       |
+| `video_processing_pending`   | flag                       | Видео обрабатывается                     | Нет                                       |
+| `paid_suggested_post_stars`  | flag                       | Платный рейтинг предложений              | Нет                                       |
+| `paid_suggested_post_ton`    | flag                       | Платный контент                          | Нет                                       |
