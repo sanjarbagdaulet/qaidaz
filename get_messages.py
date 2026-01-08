@@ -1,19 +1,17 @@
 import sqlite3
 import logging
-
 from telethon import TelegramClient
 from accounts import ACC_MAIN
-from sleep_policy import sleep_before_tg_call, mark_tg_call, local_sleep
+from sleep_policy import sleep_before_tg_call, local_sleep, init_lock_db, WORKER_ID
 
 # ======================================================================
-# CONFIG check
+# CONFIG
 # ======================================================================
-
 DB_PATH = "telegram_channels.db"
 MESSAGES_LIMIT = 100
 MIN_SUBSCRIBERS = 100000
 CYCLE_SLEEP = 5  # пауза между итерациями цикла
-LOG_FILE = "get_messages_errors.log"  # ошибки пишем сюда
+LOG_FILE = "get_messages_errors.log"
 
 a = ACC_MAIN
 client = TelegramClient(a.session, a.api_id, a.api_hash)
@@ -21,21 +19,18 @@ client = TelegramClient(a.session, a.api_id, a.api_hash)
 # ======================================================================
 # LOGGING
 # ======================================================================
-
 logging.basicConfig(
     level=logging.ERROR,
     format="%(asctime)s [%(levelname)s] %(message)s",
     filename=LOG_FILE,
     filemode="a",
 )
-
 logger = logging.getLogger("get_messages")
+
 
 # ======================================================================
 # DB
 # ======================================================================
-
-
 def get_db_connection():
     return sqlite3.connect(DB_PATH)
 
@@ -43,10 +38,9 @@ def get_db_connection():
 # ======================================================================
 # CHANNEL SELECTION
 # ======================================================================
-
 def get_channel_to_process(conn):
     query = """
-    SELECT id, tg_id
+    SELECT tg_id
     FROM channels
     WHERE subscribers_count >= ?
       AND processed = 0
@@ -59,7 +53,6 @@ def get_channel_to_process(conn):
 # ======================================================================
 # MESSAGE FILTERING
 # ======================================================================
-
 def should_skip_message(msg):
     if msg.fwd_from is not None:
         return True
@@ -71,7 +64,6 @@ def should_skip_message(msg):
 # ======================================================================
 # MESSAGE NORMALIZATION
 # ======================================================================
-
 def extract_media_type(msg):
     return "text" if msg.media is None else type(msg.media).__name__
 
@@ -79,50 +71,40 @@ def extract_media_type(msg):
 # ======================================================================
 # PERSISTENCE
 # ======================================================================
-
-def save_message(conn, channel_id, msg):
-    """
-    Сохраняет сообщение в таблицу messages.
-
-    Аргументы:
-        conn        : sqlite3.Connection
-        channel_id  : int  - локальный ID канала
-        msg         : telethon.tl.types.Message
-    """
-
+def save_message(conn, channel_tg_id, msg):
     try:
         conn.execute(
             """
             INSERT INTO messages (
-                id, channel_id, text, timestamp, media_type, is_text
+                channel_id,
+                id,
+                date,
+                text,
+                media_type,
+                kazakh_ratio
             )
             VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO NOTHING;
+            ON CONFLICT(channel_id, id) DO NOTHING;
             """,
             (
-                msg.id,
-                channel_id,
-                msg.message,
-                msg.date.isoformat(),
+                channel_tg_id,        # tg_id канала
+                msg.id,               # ID сообщения
+                msg.date,             # дата публикации
+                msg.message,          # текст или None
                 extract_media_type(msg),
-                1 if msg.message else 0
+                None                  # kazakh_ratio пока не рассчитываем
             ),
         )
-    except Exception as e:
-        logger.exception(f"Failed to save message {msg.id} from channel {channel_id}")
+    except Exception:
+        logger.exception(
+            f"Failed to save message {msg.id} from channel {channel_tg_id}"
+        )
 
 
 def mark_channel_processed(conn, channel_id):
-    """
-    Помечает канал как обработанный (processed = 1).
-
-    Аргументы:
-        conn        : sqlite3.Connection
-        channel_id  : int
-    """
     try:
         conn.execute(
-            "UPDATE channels SET processed = 1 WHERE id = ?",
+            "UPDATE channels SET processed = 1 WHERE tg_id = ?",
             (channel_id,)
         )
     except Exception as e:
@@ -132,31 +114,27 @@ def mark_channel_processed(conn, channel_id):
 # ======================================================================
 # MAIN LOOP
 # ======================================================================
-
 def main():
+    init_lock_db()  # создаём таблицу для координации воркеров
+
     try:
         with client:
             while True:
                 with get_db_connection() as conn:
 
-                    channel = get_channel_to_process(conn)
-
-                    if not channel:
-                        conn.close()
+                    channel_id = get_channel_to_process(conn)
+                    if not channel_id:
                         local_sleep(CYCLE_SLEEP)
                         continue
 
-                    channel_id, tg_id = channel
-
-                    # глобальный sleep перед TG API
+                    # ---- глобальный sleep через lock DB ----
                     sleep_before_tg_call()
+
                     try:
-                        messages = client.get_messages(tg_id, limit=MESSAGES_LIMIT)
+                        messages = client.get_messages(channel_id, limit=MESSAGES_LIMIT)
                     except Exception as e:
-                        logger.exception(f"Failed to get messages for channel {tg_id}")
-                        messages = []  # пустой список, чтобы цикл ниже ничего не сохранял
-                    finally:
-                        mark_tg_call()
+                        logger.exception(f"Failed to get messages for channel {channel_id}")
+                        messages = []
 
                     for msg in messages:
                         if should_skip_message(msg):

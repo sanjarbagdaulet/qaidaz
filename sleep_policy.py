@@ -2,75 +2,76 @@ import random
 import time
 import sqlite3
 
-DB_PATH = "telegram_channels.db"
-
-# ====== TG API sleep ======
+# ====== CONFIG ======
+LOCK_DB = "api_sleep_lock.db"
 BASE_TG_SLEEP = 300       # 5 минут
 JITTER_MAX = 120          # +0..120 секунд
-CHECK_INTERVAL = 5        # как часто проверяем last_call_ts
+CHECK_INTERVAL = 2        # Проверка каждые 2 секунды
+DEFAULT_LOCAL_SLEEP = 5   # Мелкие паузы
 
-# ====== мелкие sleep ======
-DEFAULT_LOCAL_SLEEP = 5   # секунды
-
-
-def get_db_connection():
-    return sqlite3.connect(DB_PATH)
+# Идентификатор текущего воркера (должен быть уникальным для каждого процесса)
+WORKER_ID = "worker_1"
 
 
-# -----------------------------
-# Глобальный sleep перед TG API
-# -----------------------------
-def sleep_before_tg_call():
-    """
-    Глобальный sleep перед TG API
-    """
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    while True:
-        cursor.execute("SELECT last_call_ts FROM api_sleep WHERE id = 1")
-        last_call_ts = cursor.fetchone()[0]
-        now = int(time.time())
-        target_sleep = BASE_TG_SLEEP + random.randint(0, JITTER_MAX)
-        elapsed = now - last_call_ts
-
-        if elapsed >= target_sleep:
-            break
-
-        remaining = target_sleep - elapsed
-        sleep_for = min(CHECK_INTERVAL, remaining)
-        time.sleep(sleep_for)
-
-    conn.close()
-
-
-def mark_tg_call():
-    """
-    Фиксируем момент обращения к TG API
-    """
-    now = int(time.time())
-    conn = get_db_connection()
-    conn.execute(
-        "UPDATE api_sleep SET last_call_ts = ? WHERE id = 1",
-        (now,)
-    )
+# ====== DB INIT ======
+def init_lock_db():
+    """Создаём таблицу, если её нет, и одну запись с начальным временем 0"""
+    conn = sqlite3.connect(LOCK_DB)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS api_sleep (
+            id INTEGER PRIMARY KEY,
+            last_call_ts INTEGER NOT NULL,
+            last_call_by TEXT
+        )
+    """)
+    cur = conn.execute("SELECT COUNT(*) FROM api_sleep")
+    if cur.fetchone()[0] == 0:
+        conn.execute("INSERT INTO api_sleep (id, last_call_ts, last_call_by) VALUES (1, 0, NULL)")
     conn.commit()
     conn.close()
 
 
-# -----------------------------
-# Локальные sleep / паузы между итерациями
-# -----------------------------
+# ====== ГЛОБАЛЬНЫЙ SLEEP ======
+def sleep_before_tg_call():
+    """
+    Ждём перед TG API так, чтобы:
+    - между запросами проходило BASE_TG_SLEEP + джиттер
+    - воркеры координировали свои обращения
+    """
+    while True:
+        now = int(time.time())
+        target_sleep = BASE_TG_SLEEP + random.randint(0, JITTER_MAX)
+
+        conn = sqlite3.connect(LOCK_DB)
+        cur = conn.cursor()
+
+        cur.execute("SELECT last_call_ts, last_call_by FROM api_sleep WHERE id = 1")
+        last_call_ts, last_call_by = cur.fetchone()
+        elapsed = now - last_call_ts
+
+        # Если прошло достаточно времени и последний запрос делал другой воркер
+        if elapsed >= target_sleep and last_call_by != WORKER_ID:
+            # Пытаемся атомарно обновить запись
+            updated = conn.execute(
+                "UPDATE api_sleep SET last_call_ts = ?, last_call_by = ? WHERE id = 1 AND last_call_ts = ?",
+                (now, WORKER_ID, last_call_ts)
+            ).rowcount
+            conn.commit()
+            conn.close()
+            if updated:
+                # Успешно обновили — можно делать запрос к TG API
+                return
+            else:
+                # Кто-то другой успел обновить запись, ждём
+                time.sleep(CHECK_INTERVAL)
+        else:
+            conn.close()
+            # Ждём оставшееся время или CHECK_INTERVAL, чтобы проверить снова
+            remaining = max(target_sleep - elapsed, 0)
+            time.sleep(min(CHECK_INTERVAL, remaining))
+
+
+# ====== ЛОКАЛЬНЫЕ SLEEP ======
 def local_sleep(seconds: int = DEFAULT_LOCAL_SLEEP):
-    """
-    Простая пауза
-    """
+    """Простая пауза между итерациями"""
     time.sleep(seconds)
-
-
-def local_sleep_jitter(base: int = DEFAULT_LOCAL_SLEEP, jitter: int = 0):
-    """
-    Пауза с джиттером
-    """
-    s = base + random.randint(0, jitter)
-    time.sleep(s)
