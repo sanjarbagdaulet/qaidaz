@@ -48,7 +48,9 @@ def get_channel_to_process(conn):
     query = """
     SELECT id, tg_id
     FROM channels
-    WHERE subscribers_count > ?
+    WHERE subscribers_count >= ?
+      AND processed = 0
+    ORDER BY subscribers_count DESC
     LIMIT 1
     """
     return conn.execute(query, (MIN_SUBSCRIBERS,)).fetchone()
@@ -79,15 +81,52 @@ def extract_media_type(msg):
 # ======================================================================
 
 def save_message(conn, channel_id, msg):
-    media_type = extract_media_type(msg)
-    conn.execute(
-        """
-        INSERT INTO messages (id, channel_id, text, date, media_type)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(id, channel_id) DO NOTHING;
-        """,
-        (msg.id, channel_id, msg.message, msg.date, media_type),
-    )
+    """
+    Сохраняет сообщение в таблицу messages.
+
+    Аргументы:
+        conn        : sqlite3.Connection
+        channel_id  : int  - локальный ID канала
+        msg         : telethon.tl.types.Message
+    """
+
+    try:
+        conn.execute(
+            """
+            INSERT INTO messages (
+                id, channel_id, text, timestamp, media_type, is_text
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO NOTHING;
+            """,
+            (
+                msg.id,
+                channel_id,
+                msg.message,
+                msg.date.isoformat(),
+                extract_media_type(msg),
+                1 if msg.message else 0
+            ),
+        )
+    except Exception as e:
+        logger.exception(f"Failed to save message {msg.id} from channel {channel_id}")
+
+
+def mark_channel_processed(conn, channel_id):
+    """
+    Помечает канал как обработанный (processed = 1).
+
+    Аргументы:
+        conn        : sqlite3.Connection
+        channel_id  : int
+    """
+    try:
+        conn.execute(
+            "UPDATE channels SET processed = 1 WHERE id = ?",
+            (channel_id,)
+        )
+    except Exception as e:
+        logger.exception(f"Failed to mark channel {channel_id} as processed")
 
 
 # ======================================================================
@@ -98,32 +137,34 @@ def main():
     try:
         with client:
             while True:
-                conn = get_db_connection()
-                channel = get_channel_to_process(conn)
+                with get_db_connection() as conn:
 
-                if not channel:
-                    conn.close()
-                    local_sleep(CYCLE_SLEEP)
-                    continue
+                    channel = get_channel_to_process(conn)
 
-                channel_id, tg_id = channel
-
-                # глобальный sleep перед TG API
-                sleep_before_tg_call()
-
-                messages = client.get_messages(tg_id, limit=MESSAGES_LIMIT)
-
-                mark_tg_call()
-
-                saved = 0
-                for msg in messages:
-                    if should_skip_message(msg):
+                    if not channel:
+                        conn.close()
+                        local_sleep(CYCLE_SLEEP)
                         continue
-                    save_message(conn, channel_id, msg)
-                    saved += 1
 
-                conn.commit()
-                conn.close()
+                    channel_id, tg_id = channel
+
+                    # глобальный sleep перед TG API
+                    sleep_before_tg_call()
+                    try:
+                        messages = client.get_messages(tg_id, limit=MESSAGES_LIMIT)
+                    except Exception as e:
+                        logger.exception(f"Failed to get messages for channel {tg_id}")
+                        messages = []  # пустой список, чтобы цикл ниже ничего не сохранял
+                    finally:
+                        mark_tg_call()
+
+                    for msg in messages:
+                        if should_skip_message(msg):
+                            continue
+                        save_message(conn, channel_id, msg)
+
+                    mark_channel_processed(conn, channel_id)
+                    conn.commit()
 
                 local_sleep(CYCLE_SLEEP)
 
