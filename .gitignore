@@ -6,6 +6,8 @@
 # --------------------------
 # Разрешаем конкретные папки / файлы
 # --------------------------
+!get_channels.py
+!get_qazaq.py
 !get_messages.py
 !sleep_policy.py
 
