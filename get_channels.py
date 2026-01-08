@@ -10,13 +10,17 @@ from telethon.errors import FloodWaitError, RPCError
 # ======================================================================
 # CONFIG
 # ======================================================================
+SCRIPT_NAME = "get_channels"
+
 DB_PATH = "telegram_channels.db"
 CYCLE_SLEEP = 5  # пауза между итерациями цикла
-LOG_FILE = "worker_base.log"
+LOG_FILE = f"worker_{SCRIPT_NAME}.log"
 MIN_SUBSCRIBERS = 100_000
 
+# используем session с суффиксом имени скрипта
 a = ACC_MAIN
-client = TelegramClient(a.session, a.api_id, a.api_hash)
+SESSION_FILE = f"{a.session}_{SCRIPT_NAME}"
+client = TelegramClient(SESSION_FILE, a.api_id, a.api_hash)
 
 # ======================================================================
 # LOGGING
@@ -34,28 +38,17 @@ logger = logging.getLogger("worker_base")
 # DB CONNECTION
 # ======================================================================
 def get_db_connection():
-    """
-    Возвращает подключение к SQLite с возможностью обращаться к колонкам по имени.
-    """
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
 
 def get_channel_to_fetch(conn, min_subscribers):
-    """
-    Получает из базы один канал для запроса рекомендаций.
-    Выбирает канал с достаточным числом подписчиков и ещё не обработанный.
-
-    :param conn: объект подключения к SQLite
-    :param min_subscribers: минимальное количество участников
-    :return: словарь с tg_id и username или None
-    """
     query = """
     SELECT tg_id, username
     FROM channels
     WHERE participants_count >= ?
-      AND processed = 0
+      AND channels_rcvd = 0
     ORDER BY participants_count DESC
     LIMIT 1
     """
@@ -66,53 +59,46 @@ def get_channel_to_fetch(conn, min_subscribers):
 
 
 def fetch_recommendations_for_channel(client, username):
-    """
-    Получает список рекомендованных каналов для указанного канала по username.
-
-    :param client: Telethon client
-    :param username: str, username канала
-    :return: список объектов Channel
-    """
     try:
         result = client(GetChannelRecommendationsRequest(channel=username))
-        return result.chats  # список Channel
+        return result.chats
     except FloodWaitError as e:
         logger.error(f"FloodWaitError при получении рекомендаций для {username}: {e}")
-        raise  # Жёстко падаем
+        raise
     except RPCError as e:
-        logger.error(f"RPC error при получении рекомендаций для {username}: {e}")
+        logger.error(f"RPCError при получении рекомендаций для {username}: {e}")
         return []
 
 
 def save_channel(conn, ch):
-    """
-    Сохраняет канал в таблицу channels.
-    Если канал уже есть, обновляет информацию.
-    :param conn: sqlite3 connection
-    :param ch: объект Channel от Telethon
-    """
     try:
+        if getattr(ch, "username", None):
+            db_username = ch.username
+        elif getattr(ch, "usernames", None) and len(ch.usernames) > 0:
+            db_username = ch.usernames[0].username
+        else:
+            db_username = None
+
         conn.execute(
             """
             INSERT INTO channels (
                 tg_id, title, username, participants_count, has_comments_chat,
                 access_hash, channels_rcvd, repeats_count, last_updated
             )
-            VALUES (?, ?, ?, ?, ?, ?, 1, 0, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, 0, 0, CURRENT_TIMESTAMP)
             ON CONFLICT(tg_id) DO UPDATE SET
                 title = excluded.title,
                 username = excluded.username,
                 participants_count = excluded.participants_count,
                 has_comments_chat = excluded.has_comments_chat,
                 access_hash = excluded.access_hash,
-                channels_rcvd = channels_rcvd + 1,
                 repeats_count = repeats_count + 1,
                 last_updated = CURRENT_TIMESTAMP
             """,
             (
                 ch.id,
                 getattr(ch, "title", None),
-                getattr(ch, "username", None),
+                db_username,
                 getattr(ch, "participants_count", None),
                 1 if getattr(ch, "has_comments_chat", False) else 0,
                 getattr(ch, "access_hash", None),
@@ -123,12 +109,6 @@ def save_channel(conn, ch):
 
 
 def save_recommendation(conn, source_tg_id, recommended_tg_id):
-    """
-    Сохраняет факт, что один канал рекомендовал другой.
-    :param conn: sqlite3 connection
-    :param source_tg_id: tg_id исходного канала
-    :param recommended_tg_id: tg_id рекомендованного канала
-    """
     try:
         conn.execute(
             """
@@ -144,19 +124,13 @@ def save_recommendation(conn, source_tg_id, recommended_tg_id):
 
 
 def mark_channel_processed(conn, tg_id):
-    """
-    Отмечает, что по исходному каналу уже делали запрос рекомендаций.
-    Для этого увеличиваем channels_rcvd.
-    :param conn: sqlite3 connection
-    :param tg_id: tg_id исходного канала
-    """
     try:
         conn.execute(
-            "UPDATE channels SET channels_rcvd = channels_rcvd + 1, last_updated = CURRENT_TIMESTAMP WHERE tg_id = ?",
+            "UPDATE channels SET channels_rcvd = 1, last_updated = CURRENT_TIMESTAMP WHERE tg_id = ?",
             (tg_id,)
         )
     except Exception:
-        logger.exception(f"Failed to mark channel {tg_id} as processed (channels_rcvd)")
+        logger.exception(f"Failed to mark channel {tg_id} as processed")
 
 
 # ======================================================================
@@ -175,6 +149,11 @@ def main():
                     local_sleep(CYCLE_SLEEP)
                     continue
 
+                # Если нет username, просто помечаем канал как обработанный
+                if not source_channel["username"]:
+                    mark_channel_processed(conn, source_channel["tg_id"])
+                    continue
+
                 # 2. Глобальный sleep перед вызовом API
                 sleep_before_tg_call()
 
@@ -185,12 +164,12 @@ def main():
                     )
                 except FloodWaitError:
                     logger.error(f"FloodWaitError при обработке канала {source_channel['username']}")
-                    raise  # Жёстко падаем
+                    raise
 
                 # 4. Сохраняем все рекомендованные каналы и рекомендации
                 for ch in recommended_channels:
-                    save_channel(conn, ch)  # сохраняем канал
-                    save_recommendation(conn, source_channel["tg_id"], ch.id)  # связь источник -> рекомендация
+                    save_channel(conn, ch)
+                    save_recommendation(conn, source_channel["tg_id"], ch.id)
 
                 # 5. Отмечаем, что по исходному каналу сделали запрос
                 mark_channel_processed(conn, source_channel["tg_id"])

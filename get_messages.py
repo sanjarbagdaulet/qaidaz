@@ -32,7 +32,12 @@ logger = logging.getLogger("get_messages")
 # DB
 # ======================================================================
 def get_db_connection():
-    return sqlite3.connect(DB_PATH)
+    """
+    Возвращает подключение к SQLite с возможностью обращаться к колонкам по имени.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
 # ======================================================================
@@ -40,14 +45,17 @@ def get_db_connection():
 # ======================================================================
 def get_channel_to_process(conn):
     query = """
-    SELECT tg_id
+    SELECT tg_id, username
     FROM channels
     WHERE subscribers_count >= ?
       AND processed = 0
     ORDER BY subscribers_count DESC
     LIMIT 1
     """
-    return conn.execute(query, (MIN_SUBSCRIBERS,)).fetchone()
+    row = conn.execute(query, (MIN_SUBSCRIBERS,)).fetchone()
+    if row:
+        return row["tg_id"], row["username"]
+    return None, None
 
 
 # ======================================================================
@@ -122,16 +130,17 @@ def main():
             while True:
                 with get_db_connection() as conn:
 
-                    channel_id = get_channel_to_process(conn)
+                    channel_id, username = get_channel_to_process(conn)
                     if not channel_id:
                         local_sleep(CYCLE_SLEEP)
                         continue
 
                     # ---- глобальный sleep через lock DB ----
+                    entity = client.get_input_entity(username)
                     sleep_before_tg_call()
 
                     try:
-                        messages = client.get_messages(channel_id, limit=MESSAGES_LIMIT)
+                        messages = client.get_messages(entity, limit=MESSAGES_LIMIT)
                     except Exception as e:
                         logger.exception(f"Failed to get messages for channel {channel_id}")
                         messages = []
