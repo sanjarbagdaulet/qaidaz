@@ -1,77 +1,95 @@
-import random
 import time
+import random
 import sqlite3
 
 # ====== CONFIG ======
-LOCK_DB = "api_sleep_lock.db"
-BASE_TG_SLEEP = 300       # 5 минут
-JITTER_MAX = 120          # +0..120 секунд
-CHECK_INTERVAL = 2        # Проверка каждые 2 секунды
-DEFAULT_LOCAL_SLEEP = 5   # Мелкие паузы
+DB_FILE = "api_queue.db"
 
-# Идентификатор текущего воркера (должен быть уникальным для каждого процесса)
-WORKER_ID = "worker_1"
+BASE_SLEEP = 300        # 5 минут
+JITTER_MAX = 300        # +0..5 минут (итого 5–10)
+CHECK_INTERVAL = 2      # как часто проверяем очередь
 
 
-# ====== DB INIT ======
-def init_lock_db():
-    """Создаём таблицу, если её нет, и одну запись с начальным временем 0"""
-    conn = sqlite3.connect(LOCK_DB)
+# ====== INIT ======
+def init_db():
+    """
+    Инициализация БД.
+    Должна быть вызвана один раз при старте системы.
+    """
+    conn = sqlite3.connect(DB_FILE)
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS api_sleep (
+        CREATE TABLE IF NOT EXISTS api_queue (
             id INTEGER PRIMARY KEY,
-            last_call_ts INTEGER NOT NULL,
-            last_call_by TEXT
+            last_worker TEXT,
+            last_ts INTEGER
         )
     """)
-    cur = conn.execute("SELECT COUNT(*) FROM api_sleep")
+    cur = conn.execute("SELECT COUNT(*) FROM api_queue")
     if cur.fetchone()[0] == 0:
-        conn.execute("INSERT INTO api_sleep (id, last_call_ts, last_call_by) VALUES (1, 0, NULL)")
+        conn.execute(
+            "INSERT INTO api_queue (id, last_worker, last_ts) VALUES (1, NULL, 0)"
+        )
     conn.commit()
     conn.close()
 
 
-# ====== ГЛОБАЛЬНЫЙ SLEEP ======
-def sleep_before_tg_call():
+# ====== WAIT FOR TURN ======
+def sleep_before_tg_call(worker_id: str):
     """
-    Ждём перед TG API так, чтобы:
-    - между запросами проходило BASE_TG_SLEEP + джиттер
-    - воркеры координировали свои обращения
+    Блокирует код воркера, пока:
+    - последний запрос сделал НЕ этот воркер
+    - прошло BASE_SLEEP + JITTER времени
     """
     while True:
         now = int(time.time())
-        target_sleep = BASE_TG_SLEEP + random.randint(0, JITTER_MAX)
 
-        conn = sqlite3.connect(LOCK_DB)
+        conn = sqlite3.connect(DB_FILE)
         cur = conn.cursor()
 
-        cur.execute("SELECT last_call_ts, last_call_by FROM api_sleep WHERE id = 1")
-        last_call_ts, last_call_by = cur.fetchone()
-        elapsed = now - last_call_ts
+        cur.execute(
+            "SELECT last_worker, last_ts FROM api_queue WHERE id = 1"
+        )
+        last_worker, last_ts = cur.fetchone()
+        conn.close()
 
-        # Если прошло достаточно времени и последний запрос делал другой воркер
-        if elapsed >= target_sleep and last_call_by != WORKER_ID:
-            # Пытаемся атомарно обновить запись
-            updated = conn.execute(
-                "UPDATE api_sleep SET last_call_ts = ?, last_call_by = ? WHERE id = 1 AND last_call_ts = ?",
-                (now, WORKER_ID, last_call_ts)
-            ).rowcount
-            conn.commit()
-            conn.close()
-            if updated:
-                # Успешно обновили — можно делать запрос к TG API
-                return
-            else:
-                # Кто-то другой успел обновить запись, ждём
-                time.sleep(CHECK_INTERVAL)
-        else:
-            conn.close()
-            # Ждём оставшееся время или CHECK_INTERVAL, чтобы проверить снова
-            remaining = max(target_sleep - elapsed, 0)
-            time.sleep(min(CHECK_INTERVAL, remaining))
+        # 1. Если последний был Я — жду
+        if last_worker == worker_id:
+            time.sleep(CHECK_INTERVAL)
+            continue
+
+        # 2. Если последний был НЕ Я — проверяю таймер
+        target_sleep = BASE_SLEEP + random.randint(0, JITTER_MAX)
+        elapsed = now - last_ts
+
+        if elapsed < target_sleep:
+            time.sleep(min(CHECK_INTERVAL, target_sleep - elapsed))
+            continue
+
+        # 3. Очередь моя и время прошло
+        return
 
 
-# ====== ЛОКАЛЬНЫЕ SLEEP ======
-def local_sleep(seconds: int = DEFAULT_LOCAL_SLEEP):
-    """Простая пауза между итерациями"""
-    time.sleep(seconds)
+# ====== MARK CALL ======
+def mark_tg_call(worker_id: str) -> bool:
+    """
+    Фиксирует факт TG API вызова.
+    Возвращает True, если запись успешна.
+    """
+    now = int(time.time())
+
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+
+    updated = cur.execute(
+        """
+        UPDATE api_queue
+        SET last_worker = ?, last_ts = ?
+        WHERE id = 1 AND last_worker != ?
+        """,
+        (worker_id, now, worker_id)
+    ).rowcount
+
+    conn.commit()
+    conn.close()
+
+    return updated == 1
