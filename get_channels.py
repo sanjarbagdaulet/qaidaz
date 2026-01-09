@@ -1,8 +1,10 @@
 import sqlite3
 import logging
+import time
+
 from telethon import TelegramClient
 from accounts import ACC_MAIN
-from sleep_policy import sleep_before_tg_call, local_sleep, init_lock_db
+from sleep_policy import init_db, sleep_before_tg_call, mark_tg_call
 
 from telethon.tl.functions.channels import GetChannelRecommendationsRequest
 from telethon.errors import FloodWaitError, RPCError
@@ -49,13 +51,14 @@ def get_channel_to_fetch(conn, min_subscribers):
     FROM channels
     WHERE participants_count >= ?
       AND channels_rcvd = 0
-    ORDER BY participants_count DESC
+      AND kazakh_ratio_avg >= ?
+    ORDER BY kazakh_ratio_avg DESC, participants_count DESC
     LIMIT 1
     """
-    row = conn.execute(query, (min_subscribers,)).fetchone()
+    row = conn.execute(query, (min_subscribers, 0.7)).fetchone()
     if row:
         return {"tg_id": row["tg_id"], "username": row["username"]}
-    return None
+    return None, None
 
 
 def fetch_recommendations_for_channel(client, username):
@@ -137,7 +140,7 @@ def mark_channel_processed(conn, tg_id):
 # MAIN LOOP
 # ======================================================================
 def main():
-    init_lock_db()  # глобальная синхронизация воркеров
+    init_db()  # глобальная синхронизация воркеров
 
     with client:
         while True:
@@ -146,7 +149,7 @@ def main():
                 # 1. Берём канал для запроса рекомендаций
                 source_channel = get_channel_to_fetch(conn, MIN_SUBSCRIBERS)
                 if not source_channel:
-                    local_sleep(CYCLE_SLEEP)
+                    time.sleep(2)
                     continue
 
                 # Если нет username, просто помечаем канал как обработанный
@@ -154,8 +157,8 @@ def main():
                     mark_channel_processed(conn, source_channel["tg_id"])
                     continue
 
-                # 2. Глобальный sleep перед вызовом API
-                sleep_before_tg_call()
+                # 2. Глобальный sleep перед вызовом API (ждём своей очереди)
+                sleep_before_tg_call('worker_2')
 
                 # 3. Получаем список рекомендованных каналов
                 try:
@@ -177,8 +180,11 @@ def main():
                 # 6. Commit изменений
                 conn.commit()
 
+                # ---- фиксируем, что TG API вызов сделан, очередь переходит другому воркеру ----
+                mark_tg_call('worker_2')
+
             # 7. Локальный sleep между итерациями
-            local_sleep(CYCLE_SLEEP)
+            time.sleep(2)
 
 
 if __name__ == "__main__":

@@ -1,18 +1,10 @@
-# kazakh_ratio_worker.py
-
 import re
-import time
 import sqlite3
 from lingua import Language, LanguageDetectorBuilder
 
-# ================== НАСТРОЙКИ ==================
-DB_PATH = "telegram_channels.db"  # путь к базе
-BATCH_SIZE = 20                   # сколько сообщений обрабатываем за раз
-LOOP_SLEEP = 2                     # пауза между циклами (секунды)
-MIN_WORD_LENGTH = 2                # минимальная длина слова для анализа
-# ===============================================
+DB_PATH = "telegram_channels.db"
+MIN_WORD_LENGTH = 2
 
-# Создаём детектор языка для казахского и русского
 detector = LanguageDetectorBuilder.from_languages(
     Language.KAZAKH,
     Language.RUSSIAN
@@ -20,67 +12,54 @@ detector = LanguageDetectorBuilder.from_languages(
 
 
 def kazakh_ratio(text: str) -> float:
-    """
-    Рассчитывает долю слов на казахском языке в тексте.
-    Возвращает значение от 0.0 до 1.0
-    """
     if not text:
         return 0.0
-
-    # очистка текста: ссылки, спецсимволы
     text = text.lower()
-    text = re.sub(r"http\S+", "", text)              # убираем ссылки
-    text = re.sub(r"[^a-zа-яәіңғүұқөһ\s]", " ", text)  # оставляем только буквы
-
+    text = re.sub(r"http\S+", "", text)
+    text = re.sub(r"[^a-zа-яәіңғүұқөһ\s]", " ", text)
     words = [w for w in text.split() if len(w) >= MIN_WORD_LENGTH]
     if not words:
         return 0.0
-
-    kk_count = 0
-    for w in words:
-        if detector.detect_language_of(w) == Language.KAZAKH:
-            kk_count += 1
-
+    kk_count = sum(1 for w in words if detector.detect_language_of(w) == Language.KAZAKH)
     return round(kk_count / len(words), 3)
 
 
-def worker_loop():
-    """
-    Главный цикл воркера.
-    Берёт партии сообщений без kazakh_ratio, анализирует и обновляет.
-    Работает бесконечно.
-    """
+def main():
     conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
-    while True:
-        # получаем batch сообщений без kazakh_ratio
+    # Получаем все текстовые сообщения без казахо-ратио
+    cur.execute("""
+        SELECT channel_id, id, text
+        FROM messages
+        WHERE text IS NOT NULL AND kazakh_ratio IS NULL
+    """)
+    rows = cur.fetchall()
+
+    channel_ratios = {}  # key: channel_id, value: [ratios]
+
+    for row in rows:
+        ratio = kazakh_ratio(row["text"])
         cur.execute("""
-            SELECT channel_tg_id, message_id, text
-            FROM messages
-            WHERE is_text = 1
-              AND kazakh_ratio IS NULL
-            LIMIT ?
-        """, (BATCH_SIZE,))
+            UPDATE messages
+            SET kazakh_ratio = ?
+            WHERE channel_id = ? AND id = ?
+        """, (ratio, row["channel_id"], row["id"]))
+        channel_ratios.setdefault(row["channel_id"], []).append(ratio)
 
-        rows = cur.fetchall()
+    # Обновляем channels.kazakh_ratio_avg
+    for channel_id, ratios in channel_ratios.items():
+        avg_ratio = round(sum(ratios) / len(ratios), 3)
+        cur.execute("""
+            UPDATE channels
+            SET kazakh_ratio_avg = ?
+            WHERE tg_id = ?
+        """, (avg_ratio, channel_id))
 
-        if not rows:
-            # если ничего нет, ждем и повторяем
-            time.sleep(LOOP_SLEEP)
-            continue
-
-        for channel_id, msg_id, text in rows:
-            ratio = kazakh_ratio(text)
-            cur.execute("""
-                UPDATE messages
-                SET kazakh_ratio = ?
-                WHERE channel_tg_id = ? AND message_id = ?
-            """, (ratio, channel_id, msg_id))
-
-        conn.commit()
-        time.sleep(LOOP_SLEEP)
+    conn.commit()
+    conn.close()
 
 
 if __name__ == "__main__":
-    worker_loop()
+    main()

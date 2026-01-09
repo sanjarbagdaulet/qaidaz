@@ -1,8 +1,10 @@
 import sqlite3
 import logging
+import time
+
 from telethon import TelegramClient
 from accounts import ACC_MAIN
-from sleep_policy import sleep_before_tg_call, local_sleep, init_lock_db, WORKER_ID
+from sleep_policy import init_db, sleep_before_tg_call, mark_tg_call
 
 # ======================================================================
 # CONFIG
@@ -115,7 +117,7 @@ def mark_channel_processed(conn, channel_id):
             "UPDATE channels SET processed = 1 WHERE tg_id = ?",
             (channel_id,)
         )
-    except Exception as e:
+    except Exception:
         logger.exception(f"Failed to mark channel {channel_id} as processed")
 
 
@@ -123,7 +125,7 @@ def mark_channel_processed(conn, channel_id):
 # MAIN LOOP
 # ======================================================================
 def main():
-    init_lock_db()  # создаём таблицу для координации воркеров
+    init_db()  # создаём таблицу для координации воркеров
 
     try:
         with client:
@@ -132,16 +134,16 @@ def main():
 
                     channel_id, username = get_channel_to_process(conn)
                     if not channel_id:
-                        local_sleep(CYCLE_SLEEP)
+                        time.sleep(CYCLE_SLEEP)
                         continue
 
-                    # ---- глобальный sleep через lock DB ----
+                    # ---- глобальный sleep через очередь ----
                     entity = client.get_input_entity(username)
-                    sleep_before_tg_call()
+                    sleep_before_tg_call('worker_1')  # ждём своей очереди
 
                     try:
                         messages = client.get_messages(entity, limit=MESSAGES_LIMIT)
-                    except Exception as e:
+                    except Exception:
                         logger.exception(f"Failed to get messages for channel {channel_id}")
                         messages = []
 
@@ -153,9 +155,13 @@ def main():
                     mark_channel_processed(conn, channel_id)
                     conn.commit()
 
-                local_sleep(CYCLE_SLEEP)
+                    # ---- отмечаем, что сделали TG API вызов ----
+                    mark_tg_call('worker_1')
 
-    except Exception as e:
+                # пауза между итерациями
+                time.sleep(CYCLE_SLEEP)
+
+    except Exception:
         logger.exception("Unhandled error in get_messages worker")
 
 
