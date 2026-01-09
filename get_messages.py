@@ -16,7 +16,7 @@ CYCLE_SLEEP = 5  # пауза между итерациями цикла
 LOG_FILE = "get_messages_errors.log"
 
 a = ACC_MAIN
-client = TelegramClient(a.session, a.api_id, a.api_hash)
+client = TelegramClient(a.session + 'get_messages', a.api_id, a.api_hash)
 
 # ======================================================================
 # LOGGING
