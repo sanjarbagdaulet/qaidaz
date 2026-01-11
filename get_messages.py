@@ -37,7 +37,7 @@ def get_channel(conn):
     query = """
         SELECT channel_id, access_hash
         FROM channels
-        WHERE subscribers_count >= ?
+        WHERE participants_count >= ?
           AND msgs_rcvd = 0
         ORDER BY subscribers_count DESC
         LIMIT 1
