@@ -1,36 +1,27 @@
-from telethon import TelegramClient
-from accounts import ACC_MAIN
-from telethon.errors import FloodWaitError
-from telethon.tl.functions.channels import GetChannelRecommendationsRequest
-from telethon.tl.types import InputPeerChannel
-
-import time
 import sqlite3
+import time
 import random
 import logging
 
-
-# ---------------- CONFIG ----------------
+from telethon.sync import TelegramClient
+from telethon.tl.functions.channels import GetChannelRecommendationsRequest
+from telethon.tl.types import InputChannel
+from telethon.errors import FloodWaitError
+from accounts import ACC_MAIN
 
 WORKER = "get_channels"
-INTERVAL = 2
-DB_PATH = "telegram_client.db"
-
-MIN_SUBSCRIBERS = 100_000
 BASE = 300
 JITTER_MAX = 300
-
-a = ACC_MAIN
-client = TelegramClient(a.session + WORKER, a.api_id, a.api_hash)
+INTERVAL = 2
+MIN_SUBSCRIBERS = 100_000
+DB_PATH = 'telegram_channels.db'
 
 logging.basicConfig(
-    format='[%(levelname)s %(asctime)s] %(name)s: %(message)s',
     level=logging.ERROR,
-    filename=WORKER + '.log',
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    filename=f'{WORKER}.log'
 )
 
-
-# ---------------- DB ----------------
 
 def db_connect():
     conn = sqlite3.connect(DB_PATH)
@@ -40,131 +31,111 @@ def db_connect():
     return conn
 
 
-def get_channel(conn):
-    row = conn.execute(
-        """
-        SELECT tg_id, access_hash
+def get_seed_channel(conn):
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT channel_id, access_hash 
         FROM channels
-        WHERE subscribers_count >= ?
-          AND c_rcvd = 0
-          AND (
-                kk_ratio_by_l >= 0.7
-                OR kk_ratio_by_f >= 0.7
-              )
-        ORDER BY subscribers_count DESC
-        LIMIT 1;
-        """,
-        (MIN_SUBSCRIBERS,)
-    ).fetchone()
-
+        WHERE c_rcvd = 0
+          AND not_kz != 1
+          AND participants_count >= ?
+          AND (kk_ratio_by_l > 0 OR kk_ratio_by_f > 0)
+        ORDER BY participants_count DESC
+        LIMIT 1
+    """, (MIN_SUBSCRIBERS,))
+    row = cur.fetchone()
     if row:
-        return row["tg_id"], row["access_hash"]
-
-    return None, None
-
-
-def save_channel(conn, ch):
-    conn.execute(
-        """
-        INSERT INTO channels (
-            tg_id,
-            access_hash,
-            title,
-            username,
-            subscribers_count
-        )
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(tg_id) DO UPDATE SET
-            access_hash = COALESCE(excluded.access_hash, channels.access_hash),
-            title = excluded.title,
-            username = excluded.username,
-            subscribers_count = excluded.subscribers_count
-        """,
-        (
-            ch.id,
-            ch.access_hash,
-            ch.title,
-            ch.username,
-            ch.participants_count or 0,
-        )
-    )
+        return InputChannel(channel_id=row['channel_id'], access_hash=row['access_hash'])
+    return None
 
 
-def save_recommendation(conn, seed_tg_id, rec_tg_id):
-    conn.execute(
-        """
-        INSERT OR IGNORE INTO channel_recs (
-            seed_tg_id,
-            recommended_tg_id
-        )
-        VALUES (?, ?)
-        """,
-        (seed_tg_id, rec_tg_id)
-    )
+def save_channels(conn, channels):
+    cur = conn.cursor()
+    for ch in channels:
+        username = ch.username
+        if not username:
+            continue
+
+        linked_flag = 1 if getattr(ch, 'linked_monoforum_id', None) else 0
+
+        try:
+            # Upsert: если канал есть, увеличиваем repeats_count и обновляем participants_count и linked_flag
+            cur.execute("""
+                INSERT INTO channels (
+                    channel_id, title, date, access_hash, username,
+                    participants_count, linked_monoforum_id,
+                    repeats_count, not_kz, kk_ratio_by_l, kk_ratio_by_f, c_rcvd
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0, 0.0, 0.0, 0)
+                ON CONFLICT(channel_id) DO UPDATE SET
+                    participants_count=excluded.participants_count,
+                    linked_monoforum_id=excluded.linked_monoforum_id,
+                    repeats_count=channels.repeats_count + 1
+            """, (
+                ch.id,
+                ch.title,
+                int(ch.date.timestamp()) if ch.date else int(time.time()),
+                ch.access_hash,
+                username,
+                ch.participants_count or 0,
+                linked_flag
+            ))
+        except Exception as e:
+            logging.error(f"Ошибка при сохранении канала {ch.id}: {e}")
+
+    conn.commit()
 
 
-def mark_channel_processed(conn, tg_id):
-    conn.execute(
-        "UPDATE channels SET recs_rcvd = 1 WHERE tg_id = ?",
-        (tg_id,)
-    )
+def save_recs(conn, seed_id, channels):
+    cur = conn.cursor()
+    for ch in channels:
+        try:
+            cur.execute("""
+                INSERT INTO recs (seed_channel_id, recommended_channel_id, created_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(seed_channel_id, recommended_channel_id) DO NOTHING
+            """, (seed_id, ch.id, int(time.time())))
+        except Exception as e:
+            logging.error(f"Ошибка при сохранении рекомендации {seed_id} -> {ch.id}: {e}")
+    conn.commit()
 
 
-# ---------------- MAIN ----------------
+def mark_channel_processed(conn, channel_id):
+    cur = conn.cursor()
+    cur.execute("UPDATE channels SET c_rcvd = 1 WHERE channel_id = ?", (channel_id,))
+    conn.commit()
+
 
 def main():
-    try:
-        with client:
-            while True:
-                with db_connect() as conn:
+    conn = db_connect()
+    client = TelegramClient(ACC_MAIN.session + WORKER, ACC_MAIN.api_id, ACC_MAIN.api_hash)
+    client.start()
 
-                    tg_id, access_hash = get_channel(conn)
+    while True:
+        seed = get_seed_channel(conn)
+        if not seed:
+            logging.error("Нет подходящего канала для обработки. Пропуск итерации.")
+            time.sleep(INTERVAL)
+            continue
 
-                    if tg_id:
+        # Пауза перед запросом API
+        time.sleep(BASE + random.randint(0, JITTER_MAX))
 
-                        time.sleep(BASE + random.randint(0, JITTER_MAX))
+        try:
+            result = client(GetChannelRecommendationsRequest(peer=seed))
+        except FloodWaitError as e:
+            logging.error(f"FloodWait: {e.seconds} секунд. Скрипт остановлен.")
+            return
+        except Exception as e:
+            logging.error(f"Ошибка запроса рекомендаций: {e}")
+            time.sleep(INTERVAL)
+            continue
 
-                        entity = InputPeerChannel(
-                            channel_id=tg_id,
-                            access_hash=access_hash
-                        )
+        save_channels(conn, result.chats)
+        save_recs(conn, seed.channel_id, result.chats)
+        mark_channel_processed(conn, seed.channel_id)
 
-                        try:
-                            result = client(
-                                GetChannelRecommendationsRequest(channel=entity)
-                            )
-
-                        except FloodWaitError as e:
-                            logging.error(
-                                f"FloodWait: channel={tg_id}, wait={e.seconds}s"
-                            )
-                            raise
-
-                        except Exception as e:
-                            logging.error(
-                                f"Unexpected error: channel={tg_id}, {str(e)}"
-                            )
-                            result = None
-
-                        if not result or not result.chats:
-                            logging.warning(
-                                f"Пустые рекомендации | tg_id={tg_id}"
-                            )
-                            mark_channel_processed(conn, tg_id)
-                            continue
-
-                        # ---------- одна транзакция ----------
-                        for ch in result.chats:
-                            save_channel(conn, ch)
-                            save_recommendation(conn, tg_id, ch.id)
-
-                        mark_channel_processed(conn, tg_id)
-
-                time.sleep(INTERVAL)
-
-    except Exception as e:
-        logging.error(f"Unexpected error: {str(e)}")
+        time.sleep(INTERVAL)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
