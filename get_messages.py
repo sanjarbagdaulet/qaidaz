@@ -1,4 +1,4 @@
-from telethon import TelegramClient
+from telethon.sync import TelegramClient
 from accounts import ACC_FARM_1
 from telethon.errors import FloodWaitError
 from telethon.tl.types import InputPeerChannel
