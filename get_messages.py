@@ -1,5 +1,5 @@
 from telethon import TelegramClient
-from accounts import ACC_FARM_2
+from accounts import ACC_FARM_1
 from telethon.errors import FloodWaitError
 from telethon.tl.types import InputPeerChannel
 
@@ -15,7 +15,7 @@ MIN_SUBSCRIBERS = 100_000
 BASE = 300
 JITTER_MAX = 300
 
-a = ACC_FARM_2
+a = ACC_FARM_1
 client = TelegramClient(a.session + WORKER, a.api_id, a.api_hash)
 
 logging.basicConfig(
