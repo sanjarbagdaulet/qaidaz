@@ -113,7 +113,6 @@ def main():
     while True:
         seed = get_seed_channel(conn)
         if not seed:
-            logging.error("Нет подходящего канала для обработки. Пропуск итерации.")
             time.sleep(INTERVAL)
             continue
 
