@@ -1,190 +1,169 @@
-import sqlite3
-import logging
-import time
-
 from telethon import TelegramClient
 from accounts import ACC_MAIN
-from sleep_policy import init_db, sleep_before_tg_call, mark_tg_call
-
+from telethon.errors import FloodWaitError
 from telethon.tl.functions.channels import GetChannelRecommendationsRequest
-from telethon.errors import FloodWaitError, RPCError
+from telethon.tl.types import InputPeerChannel
 
-# ======================================================================
-# CONFIG
-# ======================================================================
-SCRIPT_NAME = "get_channels"
+import time
+import sqlite3
+import random
+import logging
 
-DB_PATH = "telegram_channels.db"
-CYCLE_SLEEP = 5  # пауза между итерациями цикла
-LOG_FILE = f"worker_{SCRIPT_NAME}.log"
+
+# ---------------- CONFIG ----------------
+
+WORKER = "get_channels"
+INTERVAL = 2
+DB_PATH = "telegram_client.db"
+
 MIN_SUBSCRIBERS = 100_000
+BASE = 300
+JITTER_MAX = 300
 
-# используем session с суффиксом имени скрипта
 a = ACC_MAIN
-SESSION_FILE = f"{a.session}_{SCRIPT_NAME}"
-client = TelegramClient(SESSION_FILE, a.api_id, a.api_hash)
+client = TelegramClient(a.session + WORKER, a.api_id, a.api_hash)
 
-# ======================================================================
-# LOGGING
-# ======================================================================
 logging.basicConfig(
+    format='[%(levelname)s %(asctime)s] %(name)s: %(message)s',
     level=logging.ERROR,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    filename=LOG_FILE,
-    filemode="a",
+    filename=WORKER + '.log',
 )
-logger = logging.getLogger("worker_base")
 
 
-# ======================================================================
-# DB CONNECTION
-# ======================================================================
-def get_db_connection():
+# ---------------- DB ----------------
+
+def db_connect():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA busy_timeout = 5000;")
     return conn
 
 
-def get_channel_to_fetch(conn, min_subscribers):
-    query = """
-    SELECT tg_id, username
-    FROM channels
-    WHERE participants_count >= ?
-      AND channels_rcvd = 0
-      AND kazakh_ratio_avg >= ?
-    ORDER BY kazakh_ratio_avg DESC, participants_count DESC
-    LIMIT 1
-    """
-    row = conn.execute(query, (min_subscribers, 0.7)).fetchone()
+def get_channel(conn):
+    row = conn.execute(
+        """
+        SELECT tg_id, access_hash
+        FROM channels
+        WHERE subscribers_count >= ?
+          AND c_rcvd = 0
+          AND (
+                kk_ratio_by_l >= 0.7
+                OR kk_ratio_by_f >= 0.7
+              )
+        ORDER BY subscribers_count DESC
+        LIMIT 1;
+        """,
+        (MIN_SUBSCRIBERS,)
+    ).fetchone()
+
     if row:
-        return {"tg_id": row["tg_id"], "username": row["username"]}
+        return row["tg_id"], row["access_hash"]
+
     return None, None
 
 
-def fetch_recommendations_for_channel(client, username):
-    try:
-        result = client(GetChannelRecommendationsRequest(channel=username))
-        return result.chats
-    except FloodWaitError as e:
-        logger.error(f"FloodWaitError при получении рекомендаций для {username}: {e}")
-        raise
-    except RPCError as e:
-        logger.error(f"RPCError при получении рекомендаций для {username}: {e}")
-        return []
-
-
 def save_channel(conn, ch):
-    try:
-        if getattr(ch, "username", None):
-            db_username = ch.username
-        elif getattr(ch, "usernames", None) and len(ch.usernames) > 0:
-            db_username = ch.usernames[0].username
-        else:
-            db_username = None
-
-        conn.execute(
-            """
-            INSERT INTO channels (
-                tg_id, title, username, participants_count, has_comments_chat,
-                access_hash, channels_rcvd, repeats_count, last_updated
-            )
-            VALUES (?, ?, ?, ?, ?, ?, 0, 0, CURRENT_TIMESTAMP)
-            ON CONFLICT(tg_id) DO UPDATE SET
-                title = excluded.title,
-                username = excluded.username,
-                participants_count = excluded.participants_count,
-                has_comments_chat = excluded.has_comments_chat,
-                access_hash = excluded.access_hash,
-                repeats_count = repeats_count + 1,
-                last_updated = CURRENT_TIMESTAMP
-            """,
-            (
-                ch.id,
-                getattr(ch, "title", None),
-                db_username,
-                getattr(ch, "participants_count", None),
-                1 if getattr(ch, "has_comments_chat", False) else 0,
-                getattr(ch, "access_hash", None),
-            ),
+    conn.execute(
+        """
+        INSERT INTO channels (
+            tg_id,
+            access_hash,
+            title,
+            username,
+            subscribers_count
         )
-    except Exception:
-        logger.exception(f"Failed to save channel {getattr(ch, 'username', ch.id)}")
-
-
-def save_recommendation(conn, source_tg_id, recommended_tg_id):
-    try:
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO recommendations (
-                source_channel_id, recommended_channel_id, date_checked
-            )
-            VALUES (?, ?, CURRENT_TIMESTAMP)
-            """,
-            (source_tg_id, recommended_tg_id),
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(tg_id) DO UPDATE SET
+            access_hash = COALESCE(excluded.access_hash, channels.access_hash),
+            title = excluded.title,
+            username = excluded.username,
+            subscribers_count = excluded.subscribers_count
+        """,
+        (
+            ch.id,
+            ch.access_hash,
+            ch.title,
+            ch.username,
+            ch.participants_count or 0,
         )
-    except Exception:
-        logger.exception(f"Failed to save recommendation {source_tg_id} -> {recommended_tg_id}")
+    )
+
+
+def save_recommendation(conn, seed_tg_id, rec_tg_id):
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO channel_recs (
+            seed_tg_id,
+            recommended_tg_id
+        )
+        VALUES (?, ?)
+        """,
+        (seed_tg_id, rec_tg_id)
+    )
 
 
 def mark_channel_processed(conn, tg_id):
-    try:
-        conn.execute(
-            "UPDATE channels SET channels_rcvd = 1, last_updated = CURRENT_TIMESTAMP WHERE tg_id = ?",
-            (tg_id,)
-        )
-    except Exception:
-        logger.exception(f"Failed to mark channel {tg_id} as processed")
+    conn.execute(
+        "UPDATE channels SET recs_rcvd = 1 WHERE tg_id = ?",
+        (tg_id,)
+    )
 
 
-# ======================================================================
-# MAIN LOOP
-# ======================================================================
+# ---------------- MAIN ----------------
+
 def main():
-    init_db()  # глобальная синхронизация воркеров
+    try:
+        with client:
+            while True:
+                with db_connect() as conn:
 
-    with client:
-        while True:
-            with get_db_connection() as conn:
+                    tg_id, access_hash = get_channel(conn)
 
-                # 1. Берём канал для запроса рекомендаций
-                source_channel = get_channel_to_fetch(conn, MIN_SUBSCRIBERS)
-                if not source_channel:
-                    time.sleep(2)
-                    continue
+                    if tg_id:
 
-                # Если нет username, просто помечаем канал как обработанный
-                if not source_channel["username"]:
-                    mark_channel_processed(conn, source_channel["tg_id"])
-                    continue
+                        time.sleep(BASE + random.randint(0, JITTER_MAX))
 
-                # 2. Глобальный sleep перед вызовом API (ждём своей очереди)
-                sleep_before_tg_call('worker_2')
+                        entity = InputPeerChannel(
+                            channel_id=tg_id,
+                            access_hash=access_hash
+                        )
 
-                # 3. Получаем список рекомендованных каналов
-                try:
-                    recommended_channels = fetch_recommendations_for_channel(
-                        client, source_channel["username"]
-                    )
-                except FloodWaitError:
-                    logger.error(f"FloodWaitError при обработке канала {source_channel['username']}")
-                    raise
+                        try:
+                            result = client(
+                                GetChannelRecommendationsRequest(channel=entity)
+                            )
 
-                # 4. Сохраняем все рекомендованные каналы и рекомендации
-                for ch in recommended_channels:
-                    save_channel(conn, ch)
-                    save_recommendation(conn, source_channel["tg_id"], ch.id)
+                        except FloodWaitError as e:
+                            logging.error(
+                                f"FloodWait: channel={tg_id}, wait={e.seconds}s"
+                            )
+                            raise
 
-                # 5. Отмечаем, что по исходному каналу сделали запрос
-                mark_channel_processed(conn, source_channel["tg_id"])
+                        except Exception as e:
+                            logging.error(
+                                f"Unexpected error: channel={tg_id}, {str(e)}"
+                            )
+                            result = None
 
-                # 6. Commit изменений
-                conn.commit()
+                        if not result or not result.chats:
+                            logging.warning(
+                                f"Пустые рекомендации | tg_id={tg_id}"
+                            )
+                            mark_channel_processed(conn, tg_id)
+                            continue
 
-                # ---- фиксируем, что TG API вызов сделан, очередь переходит другому воркеру ----
-                mark_tg_call('worker_2')
+                        # ---------- одна транзакция ----------
+                        for ch in result.chats:
+                            save_channel(conn, ch)
+                            save_recommendation(conn, tg_id, ch.id)
 
-            # 7. Локальный sleep между итерациями
-            time.sleep(2)
+                        mark_channel_processed(conn, tg_id)
+
+                time.sleep(INTERVAL)
+
+    except Exception as e:
+        logging.error(f"Unexpected error: {str(e)}")
 
 
 if __name__ == "__main__":
