@@ -39,7 +39,7 @@ def get_channel(conn):
         FROM channels
         WHERE participants_count >= ?
           AND msgs_rcvd = 0
-        ORDER BY subscribers_count DESC
+        ORDER BY participants_count DESC
         LIMIT 1
         """
     row = conn.execute(query, (MIN_SUBSCRIBERS,)).fetchone()
