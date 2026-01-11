@@ -10,8 +10,10 @@
 !get_qazaq.py
 !get_messages.py
 !sleep_policy.py
-
 !docs/
+!docs/**
+
+
 
 # --------------------------
 # Исключаем все скрытые файлы кроме .gitignore
