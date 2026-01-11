@@ -1,4 +1,3 @@
-````markdown
 # ТЗ / Документация к скрипту `get_messages.py`
 
 ## Назначение
@@ -49,12 +48,7 @@ CREATE TABLE IF NOT EXISTS messages (
     kazakh_ratio INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (id, channel_id)
 );
-
-
-> Поле `kazakh_ratio` по умолчанию = 0.
-
----
-
+```
 ### Особенности сохранения
 
 * **Уникальность сообщений** достигается комбинацией `(id, channel_id)`.
@@ -64,7 +58,7 @@ CREATE TABLE IF NOT EXISTS messages (
 
 ---
 
-## Логика работы скрипта
+### Логика работы скрипта
 
 1. Получение канала из таблицы `channels` с минимальным количеством подписчиков и `msgs_rcvd = 0`.
 2. Формирование объекта `InputPeerChannel` с `channel_id` и `access_hash`.
@@ -82,5 +76,3 @@ CREATE TABLE IF NOT EXISTS messages (
    * `id`, `channel_id`, `date`, `message`, `media_type`, `kazakh_ratio = 0`
 7. Пометка канала как обработанного (`msgs_rcvd = 1`).
 8. Скрипт работает в цикле с задержкой `BASE + random.randint(0, JITTER_MAX)` между запросами к каналу и `INTERVAL` между итерациями.
-
-```
