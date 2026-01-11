@@ -5,7 +5,7 @@ from lingua import LanguageDetectorBuilder, Language
 
 # Настройка логирования
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.ERROR,
     format='%(asctime)s [%(levelname)s] %(message)s'
 )
 
@@ -62,7 +62,6 @@ def process_channel_messages(conn, channel_id):
             WHERE id = ? AND channel_id = ?
         """, (ratio, msg_id, channel_id))
         conn.commit()
-        logging.info(f"Processed message {msg_id} of channel {channel_id}, kazakh_ratio={ratio}")
 
         time.sleep(0.5)  # небольшой sleep, чтобы не перегружать CPU
 
@@ -85,7 +84,6 @@ def update_channel_ratio(conn, channel_id):
         WHERE channel_id = ?
     """, (avg_ratio, channel_id))
     conn.commit()
-    logging.info(f"Updated kk_ratio_by_l for channel {channel_id}: {avg_ratio:.2f}")
 
 
 def main():
@@ -111,7 +109,6 @@ def main():
             process_channel_messages(conn, channel_id)
             update_channel_ratio(conn, channel_id)
         else:
-            logging.info("No new messages to process. Sleeping...")
             time.sleep(SLEEP_INTERVAL)
 
 
