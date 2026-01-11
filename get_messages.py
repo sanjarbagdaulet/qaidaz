@@ -8,7 +8,6 @@ import sqlite3
 import random
 import logging
 
-
 WORKER = "get_messages"
 INTERVAL = 2
 DB_PATH = "telegram_channels.db"
