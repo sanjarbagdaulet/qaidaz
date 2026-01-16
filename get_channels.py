@@ -12,7 +12,7 @@ WORKER = "get_channels"
 BASE = 300
 JITTER_MAX = 300
 INTERVAL = 2
-MIN_SUBSCRIBERS = 70_000
+MIN_SUBSCRIBERS = 20_000
 
 logging.basicConfig(
     level=logging.ERROR,
