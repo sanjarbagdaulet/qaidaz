@@ -41,6 +41,7 @@ def get_channel(conn):
         FROM channels
         WHERE participants_count >= %s
           AND msgs_rcvd = 0
+          AND (not_kz IS NULL OR not_kz <> 1)
         ORDER BY participants_count DESC
         LIMIT 1
     """
