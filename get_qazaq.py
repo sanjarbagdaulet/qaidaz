@@ -1,9 +1,12 @@
 import time
 import logging
-from typing import List, Tuple, Optional, Dict, Any, Set
+from typing import List, Tuple, Optional
 
 import mariadb
 import fasttext
+
+from accounts import DB_MAIN, DBAccount
+
 
 # ================== CONFIG ==================
 
@@ -69,16 +72,25 @@ SET c.kk_ratio_by_f = m.avg_ratio,
 WHERE c.channel_id = ?;
 """
 
-# ================== DB helpers ==================
 
-def db_connect() -> mariadb.Connection:
-    return mariadb.connect(**DB_CONFIG)
+# ================== DB helpers ==================
+def db_connect(account: DBAccount = DB_MAIN) -> mariadb.Connection:
+    return mariadb.connect(
+        host=account.host,
+        port=account.port,
+        user=account.user,
+        password=account.password,
+        database=account.database,
+        autocommit=account.autocommit,
+    )
+
 
 def pick_next_channel(conn: mariadb.Connection) -> Optional[int]:
     cur = conn.cursor()
     cur.execute(SQL_PICK_CHANNEL)
     row = cur.fetchone()
     return int(row[0]) if row else None
+
 
 def fetch_messages_for_channel(
     conn: mariadb.Connection,
@@ -91,6 +103,7 @@ def fetch_messages_for_channel(
     # rows: [(id, channel_id, message), ...]
     return [(int(r[0]), int(r[1]), r[2] or "") for r in rows]
 
+
 def update_messages_batch(
     conn: mariadb.Connection,
     updates: List[Tuple[int, int, int]]
@@ -101,11 +114,13 @@ def update_messages_batch(
     cur = conn.cursor()
     cur.executemany(SQL_UPDATE_MESSAGE, updates)
 
+
 def update_channel_aggregate(conn: mariadb.Connection, channel_id: int) -> None:
     cur = conn.cursor()
     cur.execute(SQL_UPDATE_CHANNEL_AGG, (channel_id, channel_id))
 
 # ================== FastText analysis ==================
+
 
 def fasttext_kazakh_ratio(model: fasttext.FastText._FastText, text: str) -> int:
     """
@@ -131,8 +146,8 @@ def fasttext_kazakh_ratio(model: fasttext.FastText._FastText, text: str) -> int:
         return 100
     return ratio
 
-# ================== Main loop ==================
 
+# ================== Main loop ==================
 def main() -> None:
     logging.info("[%s] starting", WORKER)
 
@@ -182,6 +197,7 @@ def main() -> None:
             conn.close()
         except Exception:
             pass
+
 
 if __name__ == "__main__":
     main()
