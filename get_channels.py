@@ -12,7 +12,7 @@ WORKER = "get_channels"
 BASE = 300
 JITTER_MAX = 300
 INTERVAL = 2
-MIN_SUBSCRIBERS = 10_000
+MIN_SUBSCRIBERS = 1_000
 
 logging.basicConfig(
     level=logging.ERROR,
@@ -33,17 +33,26 @@ def db_connect():
 
 
 def get_seed_channel(conn):
+    """
+            SELECT channel_id, username
+            FROM channels
+            WHERE c_rcvd = 0
+              AND (not_kz IS NULL OR not_kz <> 1)
+              AND participants_count >= %s
+              AND (
+                    (kk_ratio_by_l IS NOT NULL AND kk_ratio_by_l > 5)
+                 OR (kk_ratio_by_f IS NOT NULL AND kk_ratio_by_f > 5)
+              )
+            ORDER BY participants_count DESC
+            LIMIT 1
+        """
     cur = conn.cursor(dictionary=True)
     cur.execute("""
         SELECT channel_id, username
         FROM channels
         WHERE c_rcvd = 0
-          AND (not_kz IS NULL OR not_kz <> 1)
+          AND not_kz = 2
           AND participants_count >= %s
-          AND (
-                (kk_ratio_by_l IS NOT NULL AND kk_ratio_by_l > 5)
-             OR (kk_ratio_by_f IS NOT NULL AND kk_ratio_by_f > 5)
-          )
         ORDER BY participants_count DESC
         LIMIT 1
     """, (MIN_SUBSCRIBERS,))

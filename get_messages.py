@@ -36,12 +36,21 @@ def db_connect():
 
 
 def get_channel(conn):
+    """
+            SELECT channel_id, username
+            FROM channels
+            WHERE participants_count >= %s
+              AND msgs_rcvd = 0
+              AND (not_kz IS NULL OR not_kz <> 1)
+            ORDER BY participants_count DESC
+            LIMIT 1
+    """
     query = """
         SELECT channel_id, username
         FROM channels
         WHERE participants_count >= %s
           AND msgs_rcvd = 0
-          AND (not_kz IS NULL OR not_kz <> 1)
+          AND not_kz = 2
         ORDER BY participants_count DESC
         LIMIT 1
     """
