@@ -160,7 +160,7 @@ def main():
                 logging.error(f"FloodWait: {e.seconds} секунд. Скрипт остановлен.")
                 return
             except Exception as e:
-                logging.error(f"Ошибка запроса рекомендаций: {e}")
+                logging.error(f"Ошибка запроса рекомендаций: {e + '\n' + username}")
                 time.sleep(INTERVAL)
                 continue
 
